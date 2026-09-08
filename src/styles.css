@@ -49,6 +49,37 @@ button {
     linear-gradient(180deg, #071013 0%, #090d10 100%);
 }
 
+.app-fallback {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    linear-gradient(90deg, rgba(57, 216, 181, .08), transparent 38%),
+    linear-gradient(180deg, #071013 0%, #090d10 100%);
+}
+
+.fallback-panel {
+  width: min(460px, 100%);
+  padding: 26px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.fallback-panel h1 {
+  margin: 8px 0 10px;
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.fallback-panel p {
+  margin: 0 0 22px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
 .sidebar {
   height: 100vh;
   position: sticky;

@@ -1,12 +1,8 @@
-import type { ComponentType, SVGProps } from 'react';
-
 export type ViewKey = 'workspace' | 'documents' | 'audit' | 'models';
 
 export type MessageRole = 'agent' | 'user';
 
 export type EngineMode = 'presentation' | 'ollama' | 'browser-demo' | 'safe-demo-fallback';
-
-export type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
 export interface HealthStatus {
   status: string;
