@@ -19,7 +19,7 @@ export function normalizeSelection(current: Set<string>, documents: VaultDocumen
   return next;
 }
 
-export function useAegisWorkspace() {
+export function useAegisWorkspace(enabled = true) {
   const [activeView, setActiveView] = useState<ViewKey>('workspace');
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -100,13 +100,24 @@ export function useAegisWorkspace() {
   }, [refreshAudit, refreshDocuments, refreshHealth]);
 
   useEffect(() => {
+    if (!enabled) return;
     const initialLoad = window.setTimeout(() => void refreshAll(), 0);
     const healthPoll = window.setInterval(() => void refreshHealth(), 20000);
     return () => {
       window.clearTimeout(initialLoad);
       window.clearInterval(healthPoll);
     };
-  }, [refreshAll, refreshHealth]);
+  }, [enabled, refreshAll, refreshHealth]);
+
+  const clearWorkspace = useCallback(() => {
+    setAudit([]);
+    setDocuments([]);
+    setMessages([]);
+    setSelectedIds(new Set());
+    setHealth(null);
+    setLastEgressBytes(0);
+    setTrace(initialTrace());
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -294,6 +305,7 @@ export function useAegisWorkspace() {
     auditCount: audit.length || health?.audit_events || 0,
     busy,
     chunkTotal,
+    clearWorkspace,
     documentSearch,
     documents,
     dragActive,

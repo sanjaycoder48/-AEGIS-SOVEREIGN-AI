@@ -8,6 +8,7 @@ from __future__ import annotations
 from email.parser import BytesParser
 from email.policy import default
 import hashlib
+import hmac
 import json
 import mimetypes
 import re
@@ -58,23 +59,33 @@ def connection():
     db.row_factory = sqlite3.Row
     db.execute("CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, filename TEXT, title TEXT, content TEXT, chunks INTEGER, created_at TEXT)")
     db.execute("CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, action TEXT, resource TEXT, result TEXT, hash TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL)")
+    db.execute("CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL)")
+    if "owner_id" not in {row["name"] for row in db.execute("PRAGMA table_info(documents)")}:
+        db.execute("ALTER TABLE documents ADD COLUMN owner_id TEXT")
+    if "user_id" not in {row["name"] for row in db.execute("PRAGMA table_info(audit)")}:
+        db.execute("ALTER TABLE audit ADD COLUMN user_id TEXT")
     return db
 
 
-def audit_hash(stamp, action, resource, result):
+def password_digest(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 240_000).hex()
+
+
+def audit_hash(stamp, action, resource, result, user_id=None):
     previous = ""
     with connection() as db:
-        row = db.execute("SELECT hash FROM audit ORDER BY id DESC LIMIT 1").fetchone()
+        row = db.execute("SELECT hash FROM audit WHERE user_id IS ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
         if row:
             previous = row["hash"]
     return hashlib.sha256(f"{previous}|{stamp}|{action}|{resource}|{result}".encode()).hexdigest()
 
 
-def write_audit(action, resource, result):
+def write_audit(action, resource, result, user_id=None):
     stamp = datetime.now(timezone.utc).isoformat()
-    digest = audit_hash(stamp, action, resource, result)
+    digest = audit_hash(stamp, action, resource, result, user_id)
     with connection() as db:
-        db.execute("INSERT INTO audit(timestamp,action,resource,result,hash) VALUES(?,?,?,?,?)", (stamp, action, resource, result, digest))
+        db.execute("INSERT INTO audit(timestamp,action,resource,result,hash,user_id) VALUES(?,?,?,?,?,?)", (stamp, action, resource, result, digest, user_id))
 
 
 def display_title(value):
@@ -99,9 +110,9 @@ def document_payload(row):
     }
 
 
-def list_documents():
+def list_documents(user_id):
     with connection() as db:
-        rows = db.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
+        rows = db.execute("SELECT * FROM documents WHERE owner_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
     return [document_payload(row) for row in rows]
 
 
@@ -114,7 +125,7 @@ def ensure_sample_document():
         content = sample.read_text(encoding="utf-8", errors="ignore")
         chunks = max(1, (len(content) + 999) // 1000)
         db.execute(
-            "INSERT INTO documents VALUES(?,?,?,?,?,?)",
+            "INSERT INTO documents(id,filename,title,content,chunks,created_at,owner_id) VALUES(?,?,?,?,?,?,NULL)",
             (
                 "sample-p4107",
                 sample.name,
@@ -138,14 +149,14 @@ def select_model(question):
     return "qwen2.5:7b", "Document risk analysis"
 
 
-def relevant_context(question, document_ids):
+def relevant_context(question, document_ids, user_id):
     terms = set(re.findall(r"[a-zA-Z0-9-]{3,}", question.lower()))
     with connection() as db:
         if document_ids:
             placeholders = ",".join("?" for _ in document_ids)
-            rows = db.execute(f"SELECT * FROM documents WHERE id IN ({placeholders})", document_ids).fetchall()
+            rows = db.execute(f"SELECT * FROM documents WHERE owner_id=? AND id IN ({placeholders})", [user_id, *document_ids]).fetchall()
         else:
-            rows = db.execute("SELECT * FROM documents ORDER BY created_at DESC LIMIT 5").fetchall()
+            rows = db.execute("SELECT * FROM documents WHERE owner_id=? ORDER BY created_at DESC LIMIT 5", (user_id,)).fetchall()
 
     passages = []
     for row in rows:
@@ -224,7 +235,7 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_security_headers()
         self.end_headers()
@@ -237,17 +248,28 @@ class Handler(SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_security_headers()
         self.end_headers()
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path == "/api/health":
+        if path == "/api/auth/status":
             with connection() as db:
-                documents = db.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"]
-                audit_events = db.execute("SELECT COUNT(*) AS total FROM audit").fetchone()["total"]
+                return self.send_json({"setup_required": db.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0})
+        if path == "/api/auth/me":
+            user = self.authenticated_user()
+            if not user:
+                return self.send_json({"detail": "Sign in to unlock this vault"}, 401)
+            return self.send_json({"id": user["id"], "name": user["name"], "username": user["username"]})
+        if path == "/api/health":
+            user = self.require_user()
+            if not user:
+                return
+            with connection() as db:
+                documents = db.execute("SELECT COUNT(*) AS total FROM documents WHERE owner_id=?", (user["id"],)).fetchone()["total"]
+                audit_events = db.execute("SELECT COUNT(*) AS total FROM audit WHERE user_id=?", (user["id"],)).fetchone()["total"]
             return self.send_json({
                 "status": "secure",
                 "ollama": False,
@@ -257,10 +279,16 @@ class Handler(SimpleHTTPRequestHandler):
                 "audit_events": audit_events,
             })
         if path == "/api/documents":
-            return self.send_json(list_documents())
+            user = self.require_user()
+            if user:
+                return self.send_json(list_documents(user["id"]))
+            return
         if path == "/api/audit":
+            user = self.require_user()
+            if not user:
+                return
             with connection() as db:
-                return self.send_json([dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100")])
+                return self.send_json([dict(row) for row in db.execute("SELECT * FROM audit WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],))])
         target = DIST / ("index.html" if path == "/" else path.lstrip("/"))
         if not target.is_file() or DIST not in target.resolve().parents:
             return self.send_error(404)
@@ -274,13 +302,91 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path == "/api/auth/register":
+            return self.register()
+        if path == "/api/auth/login":
+            return self.login()
+        if path == "/api/auth/logout":
+            return self.logout()
         if path == "/api/documents/upload":
-            return self.upload()
+            user = self.require_user()
+            return self.upload(user) if user else None
         if path == "/api/chat":
-            return self.chat()
+            user = self.require_user()
+            return self.chat(user) if user else None
         self.send_error(404)
 
-    def upload(self):
+    def json_body(self):
+        try:
+            return json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return None
+
+    def authenticated_user(self):
+        header = self.headers.get("Authorization", "")
+        if not header.startswith("Bearer "):
+            return None
+        token_hash = hashlib.sha256(header[7:].strip().encode()).hexdigest()
+        with connection() as db:
+            return db.execute("SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=?", (token_hash,)).fetchone()
+
+    def require_user(self):
+        user = self.authenticated_user()
+        if not user:
+            self.send_json({"detail": "Session expired. Sign in again"}, 401)
+        return user
+
+    def register(self):
+        body = self.json_body()
+        if body is None:
+            return self.send_json({"detail": "Invalid JSON"}, 400)
+        name = str(body.get("name", "")).strip()
+        username = str(body.get("username", "")).strip().lower()
+        password = str(body.get("password", ""))
+        if len(name) < 2 or not re.fullmatch(r"[a-z0-9._-]{3,32}", username):
+            return self.send_json({"detail": "Use a name and a 3-32 character username"}, 400)
+        if len(password) < 8:
+            return self.send_json({"detail": "Password must contain at least 8 characters"}, 400)
+        salt, user_id = uuid.uuid4().bytes, str(uuid.uuid4())
+        try:
+            with connection() as db:
+                db.execute("INSERT INTO users VALUES(?,?,?,?,?,?)", (user_id, name, username, password_digest(password, salt), salt.hex(), datetime.now(timezone.utc).isoformat()))
+                db.execute("UPDATE documents SET owner_id=? WHERE owner_id IS NULL", (user_id,))
+                db.execute("UPDATE audit SET user_id=? WHERE user_id IS NULL", (user_id,))
+        except sqlite3.IntegrityError:
+            return self.send_json({"detail": "Username already exists"}, 409)
+        token = f"aegis_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+        with connection() as db:
+            db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), user_id, datetime.now(timezone.utc).isoformat()))
+        write_audit("ACCOUNT_CREATED", username, "SUCCESS", user_id)
+        return self.send_json({"token": token, "user": {"id": user_id, "name": name, "username": username}})
+
+    def login(self):
+        body = self.json_body()
+        if body is None:
+            return self.send_json({"detail": "Invalid JSON"}, 400)
+        username, password = str(body.get("username", "")).strip().lower(), str(body.get("password", ""))
+        with connection() as db:
+            user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+        if not user or not hmac.compare_digest(user["password_hash"], password_digest(password, bytes.fromhex(user["salt"]))):
+            return self.send_json({"detail": "Invalid username or password"}, 401)
+        token = f"aegis_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+        with connection() as db:
+            db.execute("INSERT INTO sessions VALUES(?,?,?)", (hashlib.sha256(token.encode()).hexdigest(), user["id"], datetime.now(timezone.utc).isoformat()))
+        write_audit("SESSION_STARTED", username, "SUCCESS", user["id"])
+        return self.send_json({"token": token, "user": {"id": user["id"], "name": user["name"], "username": username}})
+
+    def logout(self):
+        user = self.require_user()
+        if not user:
+            return
+        token_hash = hashlib.sha256(self.headers.get("Authorization", "")[7:].strip().encode()).hexdigest()
+        write_audit("SESSION_ENDED", user["username"], "SUCCESS", user["id"])
+        with connection() as db:
+            db.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
+        return self.send_json({"ok": True})
+
+    def upload(self, user):
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
@@ -302,11 +408,11 @@ class Handler(SimpleHTTPRequestHandler):
         chunks = max(1, (len(content) + 999) // 1000)
         title = display_title(Path(name).stem)
         with connection() as db:
-            db.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)", (doc_id, name, title, content, chunks, datetime.now(timezone.utc).isoformat()))
-        write_audit("DOCUMENT_INDEXED", name, "SUCCESS")
+            db.execute("INSERT INTO documents(id,filename,title,content,chunks,created_at,owner_id) VALUES(?,?,?,?,?,?,?)", (doc_id, name, title, content, chunks, datetime.now(timezone.utc).isoformat(), user["id"]))
+        write_audit("DOCUMENT_INDEXED", name, "SUCCESS", user["id"])
         self.send_json({"id": doc_id, "filename": name, "title": title, "pages": 1, "chunks": chunks, "status": "indexed", "size_bytes": len(raw), "type": extension.lstrip(".").upper()})
 
-    def chat(self):
+    def chat(self, user):
         length = int(self.headers.get("Content-Length", "0"))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -318,10 +424,10 @@ class Handler(SimpleHTTPRequestHandler):
         started = time.perf_counter()
         model, route = select_model(question)
         document_ids = body.get("document_ids") if isinstance(body.get("document_ids"), list) else []
-        context, citations = relevant_context(question, [str(item) for item in document_ids])
+        context, citations = relevant_context(question, [str(item) for item in document_ids], user["id"])
         answer = deterministic_answer(question, context)
         time.sleep(.45)
-        write_audit("AGENT_QUERY", route, "ALLOWED")
+        write_audit("AGENT_QUERY", route, "ALLOWED", user["id"])
         self.send_json({"answer": answer, "model": model, "route": route, "citations": citations[:3], "elapsed_ms": int((time.perf_counter()-started)*1000), "mode": "safe-demo-fallback", "egress_bytes": 0})
 
 

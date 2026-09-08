@@ -1,3 +1,6 @@
+import { useEffect, useState } from 'react';
+import { getCurrentUser, logoutAccount, sessionStore } from './api/aegis';
+import { AuthGate } from './components/AuthGate';
 import { AuditView, DocumentsView, ModelsView } from './components/DataViews';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Sidebar } from './components/Sidebar';
@@ -5,14 +8,37 @@ import { Toast } from './components/Primitives';
 import { Topbar } from './components/Topbar';
 import { WorkspaceView } from './components/WorkspaceView';
 import { useAegisWorkspace } from './hooks/useAegisWorkspace';
+import type { AuthUser } from './types';
 
 function App() {
-  const workspace = useAegisWorkspace();
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [checkingSession, setCheckingSession] = useState(() => Boolean(sessionStore.get()));
+  const workspace = useAegisWorkspace(Boolean(user));
+
+  useEffect(() => {
+    if (!sessionStore.get()) {
+      return;
+    }
+    void getCurrentUser()
+      .then(setUser)
+      .catch(() => sessionStore.clear())
+      .finally(() => setCheckingSession(false));
+  }, []);
+
+  async function logout() {
+    try { await logoutAccount(); } catch { /* A local lock must always succeed. */ }
+    sessionStore.clear();
+    workspace.clearWorkspace();
+    setUser(null);
+  }
+
+  if (checkingSession) return <div className="auth-shell"><div className="auth-loader"><span className="pulse" /> Verifying local session…</div></div>;
+  if (!user) return <AuthGate onAuthenticated={setUser} />;
 
   return (
     <ErrorBoundary>
       <div className="app-shell">
-        <Sidebar activeView={workspace.activeView} isOpen={workspace.mobileOpen} onNavigate={workspace.setView} />
+        <Sidebar activeView={workspace.activeView} isOpen={workspace.mobileOpen} onNavigate={workspace.setView} onLogout={logout} user={user} />
         <main>
           <Topbar
             activeView={workspace.activeView}

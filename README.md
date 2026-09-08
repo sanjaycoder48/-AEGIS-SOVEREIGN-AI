@@ -20,6 +20,8 @@ python run_demo.py
 
 Open `http://127.0.0.1:8000`.
 
+On first launch, create the local vault owner. AEGIS hashes the password on-device and assigns the existing sample document to that private vault. Later launches require the same username and password. Use the lock button beside the operator profile to end the session.
+
 For frontend development:
 
 ```bash

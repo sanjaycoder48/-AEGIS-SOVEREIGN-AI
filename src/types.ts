@@ -4,6 +4,17 @@ export type MessageRole = 'agent' | 'user';
 
 export type EngineMode = 'presentation' | 'ollama' | 'browser-demo' | 'safe-demo-fallback';
 
+export interface AuthUser {
+  id: string;
+  name: string;
+  username: string;
+}
+
+export interface AuthSession {
+  token: string;
+  user: AuthUser;
+}
+
 export interface HealthStatus {
   status: string;
   ollama: boolean;
