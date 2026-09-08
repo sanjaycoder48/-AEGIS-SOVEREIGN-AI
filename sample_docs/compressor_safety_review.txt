@@ -1,0 +1,16 @@
+MRPL PROCESS SAFETY REVIEW — P-4107 RECIPROCATING COMPRESSOR
+Classification: Confidential — Internal Engineering Use Only
+
+1. EXECUTIVE SUMMARY
+The pre-commissioning review found that the compressor package is mechanically complete. Three safeguards require closure before startup authorization.
+
+2. CRITICAL FINDINGS
+F-01 HIGH: Emergency shutdown interlock ESD-4107 has not completed the witnessed functional test. Owner: Instrumentation. Due: before commissioning.
+F-02 HIGH: Pressure relief valve PSV-4107B certification expired on 12 August 2026. Owner: Inspection. Due: before commissioning.
+F-03 MEDIUM: Vibration at the drive-end bearing reached 6.8 mm/s during the no-load trial. Coupling misalignment is suspected. Owner: Rotating Equipment. Due: within 48 hours.
+
+3. RECOMMENDATION
+Startup authorization shall remain on hold until F-01 and F-02 are verified and signed by Process Safety. F-03 may be closed after alignment correction and a repeat vibration baseline test.
+
+4. APPROVAL ROUTE
+Required sign-off: Maintenance Manager, Inspection Manager, Process Safety Head, Operations Head.
