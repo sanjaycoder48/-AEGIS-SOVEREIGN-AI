@@ -1,4 +1,4 @@
-import type { ChatMessage, HealthStatus, TraceStep, VaultDocument } from '../types';
+import type { ChatMessage, HealthStatus, ModelOption, TraceStep, VaultDocument } from '../types';
 import { ConversationPanel } from './ConversationPanel';
 import { TracePanel } from './TracePanel';
 import { VaultPanel } from './VaultPanel';
@@ -15,6 +15,7 @@ export function WorkspaceView(props: {
   messages: ChatMessage[];
   offlineDemo: boolean;
   prompt: string;
+  selectedModel: ModelOption;
   selectedDocuments: VaultDocument[];
   selectedIds: Set<string>;
   trace: TraceStep[];

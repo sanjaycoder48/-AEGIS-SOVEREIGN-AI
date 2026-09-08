@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { askQuestion, getAudit, getDocuments, getHealth, uploadDocument } from '../api/aegis';
-import { DEMO_DOCUMENT } from '../lib/constants';
-import { csvCell, demoAnswer, displayTitle, formatAction } from '../lib/format';
+import { DEFAULT_MODEL_ID, DEMO_DOCUMENT, modelById } from '../lib/constants';
+import { demoAnswer, displayTitle } from '../lib/format';
 import { completeTrace, initialTrace, runningTrace } from '../lib/trace';
 import { validateUploadFile } from '../lib/validation';
-import type { AuditEvent, ChatMessage, ChatResponse, HealthStatus, TraceStep, VaultDocument, ViewKey } from '../types';
+import type { AuditEvent, ChatMessage, ChatResponse, HealthStatus, ModelId, TraceStep, VaultDocument, ViewKey } from '../types';
 
 function uid(prefix: string): string {
   const random = globalThis.crypto?.randomUUID?.();
@@ -32,6 +32,7 @@ export function useAegisWorkspace() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [offlineDemo, setOfflineDemo] = useState(false);
   const [prompt, setPrompt] = useState('');
+  const [selectedModelId, setSelectedModelId] = useState<ModelId>(DEFAULT_MODEL_ID);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
   const [trace, setTrace] = useState<TraceStep[]>(initialTrace);
@@ -55,6 +56,8 @@ export function useAegisWorkspace() {
     () => documents.reduce((total, document) => total + Math.max(document.chunks || 1, 1), 0),
     [documents],
   );
+
+  const selectedModel = useMemo(() => modelById(selectedModelId), [selectedModelId]);
 
   const showToast = useCallback((message: string) => {
     if (toastTimer.current) window.clearTimeout(toastTimer.current);
@@ -148,6 +151,15 @@ export function useAegisWorkspace() {
     if (document) showToast(`${document.title || document.filename} is active`);
   }, [documents, showToast]);
 
+  const selectModel = useCallback((modelId: ModelId) => {
+    const model = modelById(modelId);
+    setSelectedModelId(model.id);
+    setTrace((current) => current.map((step, index) => index === 1
+      ? { ...step, title: model.route, detail: `${model.title} selected` }
+      : step));
+    showToast(`${model.title} selected for this session`);
+  }, [showToast]);
+
   const handleUpload = useCallback(async (file?: File) => {
     if (!file) return;
     const validation = validateUploadFile(file);
@@ -219,17 +231,17 @@ export function useAegisWorkspace() {
 
     setBusy(true);
     setPrompt('');
-    setTrace(runningTrace(trimmedQuestion, selectedDocuments.length));
+    setTrace(runningTrace(trimmedQuestion, selectedDocuments.length, selectedModel.route));
     setMessages((current) => [...current, userMessage, pendingMessage]);
 
     try {
-      const result = await askQuestion(trimmedQuestion, sourceIds);
+      const result = await askQuestion(trimmedQuestion, sourceIds, selectedModelId);
       settleMessage(pendingId, result);
       setTrace(completeTrace(result.route, result.model, result.citations.length, result.elapsed_ms));
       await Promise.allSettled([refreshAudit(), refreshHealth()]);
     } catch (error) {
       if (error instanceof TypeError || offlineDemo) {
-        const result = demoAnswer(trimmedQuestion);
+        const result = demoAnswer(trimmedQuestion, selectedModelId);
         settleMessage(pendingId, result);
         setTrace(completeTrace(result.route, result.model, result.citations.length, result.elapsed_ms));
         showToast('Running in browser demo mode');
@@ -249,6 +261,8 @@ export function useAegisWorkspace() {
     prompt,
     refreshAudit,
     refreshHealth,
+    selectedModelId,
+    selectedModel.route,
     selectedDocuments.length,
     settleMessage,
     showToast,
@@ -269,23 +283,7 @@ export function useAegisWorkspace() {
       return;
     }
 
-    const csvRows = [['timestamp', 'actor', 'action', 'resource', 'result', 'hash']];
-    rows.forEach((event) => csvRows.push([
-      event.timestamp,
-      event.action === 'DOCUMENT_INDEXED' ? 'Vault service' : 'Secure Operator',
-      formatAction(event.action),
-      event.resource,
-      event.result,
-      event.hash || '',
-    ]));
-
-    const blob = new Blob([csvRows.map((row) => row.map(csvCell).join(',')).join('\n')], { type: 'text/csv' });
-    const link = document.createElement('a');
-    link.href = URL.createObjectURL(blob);
-    link.download = `aegis_audit_${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    showToast('Audit log exported');
+    showToast('Audit log export started');
   }, [audit, showToast]);
 
   return {
@@ -306,8 +304,11 @@ export function useAegisWorkspace() {
     offlineDemo,
     prompt,
     resetConversation,
+    selectModel,
     selectedDocuments,
     selectedIds,
+    selectedModel,
+    selectedModelId,
     setDocumentSearch,
     setDragActive,
     setPrompt,

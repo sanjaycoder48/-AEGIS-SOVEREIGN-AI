@@ -1,10 +1,27 @@
-import { Code2, Cpu, Download, Eye, Plus } from 'lucide-react';
+import { Check, Code2, Cpu, Download, Eye, Plus } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import { MODEL_CATALOG } from '../lib/constants';
 import { fileType, formatAction, formatBytes, formatDate } from '../lib/format';
-import type { AuditEvent, HealthStatus, VaultDocument } from '../types';
+import type { AuditEvent, HealthStatus, ModelId, ModelLane, VaultDocument } from '../types';
 import { Tag } from './Primitives';
 
-export function DocumentsView({ documents, onUploadClick }: { documents: VaultDocument[]; onUploadClick: () => void }) {
+const MODEL_ICONS: Record<ModelLane, LucideIcon> = {
+  Text: Cpu,
+  Vision: Eye,
+  Code: Code2,
+};
+
+export function DocumentsView({
+  documents,
+  selectedIds,
+  onSelectDocument,
+  onUploadClick,
+}: {
+  documents: VaultDocument[];
+  selectedIds: Set<string>;
+  onSelectDocument: (documentId: string) => void;
+  onUploadClick: () => void;
+}) {
   return (
     <section className="secondary-view">
       <div className="page-intro">
@@ -27,11 +44,12 @@ export function DocumentsView({ documents, onUploadClick }: { documents: VaultDo
               <th>Status</th>
               <th>Chunks</th>
               <th>Added</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
             {documents.length ? documents.map((document) => (
-              <tr key={document.id}>
+              <tr className={selectedIds.has(document.id) ? 'selected-row' : ''} key={document.id}>
                 <td>
                   <strong>{document.title || document.filename}</strong>
                   <small>{fileType(document)} - {formatBytes(document.size_bytes)}</small>
@@ -40,9 +58,15 @@ export function DocumentsView({ documents, onUploadClick }: { documents: VaultDo
                 <td><Tag tone={document.volatile ? 'neutral' : 'green'}>{document.volatile ? 'STAGED' : 'INDEXED'}</Tag></td>
                 <td>{document.chunks || 1}</td>
                 <td>{formatDate(document.created_at)}</td>
+                <td>
+                  <button className="row-action" type="button" onClick={() => onSelectDocument(document.id)}>
+                    {selectedIds.has(document.id) ? <Check size={14} /> : <Plus size={14} />}
+                    {selectedIds.has(document.id) ? 'Active' : 'Use'}
+                  </button>
+                </td>
               </tr>
             )) : (
-              <tr><td colSpan={5}>Upload a PDF, TXT, MD or CSV file to start the vault.</td></tr>
+              <tr><td colSpan={6}>Upload a PDF, TXT, MD or CSV file to start the vault.</td></tr>
             )}
           </tbody>
         </table>
@@ -60,10 +84,19 @@ export function AuditView({ audit, onExport }: { audit: AuditEvent[]; onExport: 
           <h2>Immutable audit trail</h2>
           <p>Every access, tool call and model response is recorded locally.</p>
         </div>
-        <button className="outline-action" type="button" onClick={onExport}>
+        <a
+          aria-disabled={!audit.length}
+          className="outline-action"
+          download="aegis_audit.csv"
+          href="/api/audit/export"
+          onClick={(event) => {
+            if (!audit.length) event.preventDefault();
+            onExport();
+          }}
+        >
           <Download size={16} />
           Export log
-        </button>
+        </a>
       </div>
       <div className="table-card">
         <table>
@@ -99,45 +132,15 @@ export function AuditView({ audit, onExport }: { audit: AuditEvent[]; onExport: 
   );
 }
 
-export function ModelsView({ health }: { health: HealthStatus | null }) {
-  const models: Array<{
-    icon: LucideIcon;
-    status: string;
-    title: string;
-    copy: string;
-    size: string;
-    lane: string;
-    active: boolean;
-  }> = [
-    {
-      icon: Cpu,
-      status: health?.ollama ? 'OLLAMA' : 'FALLBACK',
-      title: 'Qwen 2.5 7B',
-      copy: 'Document reasoning and structured drafting.',
-      size: '4.7 GB',
-      lane: 'Text',
-      active: true,
-    },
-    {
-      icon: Eye,
-      status: 'AVAILABLE',
-      title: 'Qwen2.5-VL 7B',
-      copy: 'Scanned drawings, charts and visual inspection.',
-      size: '5.4 GB',
-      lane: 'Vision',
-      active: false,
-    },
-    {
-      icon: Code2,
-      status: 'AVAILABLE',
-      title: 'DeepSeek Coder 6.7B',
-      copy: 'Internal code review and secure generation.',
-      size: '3.8 GB',
-      lane: 'Code',
-      active: false,
-    },
-  ];
-
+export function ModelsView({
+  health,
+  selectedModelId,
+  onSelectModel,
+}: {
+  health: HealthStatus | null;
+  selectedModelId: ModelId;
+  onSelectModel: (modelId: ModelId) => void;
+}) {
   return (
     <section className="secondary-view">
       <div className="page-intro">
@@ -148,20 +151,33 @@ export function ModelsView({ health }: { health: HealthStatus | null }) {
         </div>
       </div>
       <div className="model-grid">
-        {models.map(({ icon: Icon, status, title, copy, size, lane, active }) => (
-          <article className={`model-card ${active ? 'active-model-card' : ''}`} key={title}>
+        {MODEL_CATALOG.map((model) => {
+          const active = model.id === selectedModelId;
+          const Icon = MODEL_ICONS[model.lane];
+          const status = active ? 'ACTIVE' : model.id === 'qwen2.5:7b' && health?.ollama ? 'OLLAMA' : 'AVAILABLE';
+
+          return (
+          <button
+            aria-pressed={active}
+            className={`model-card ${active ? 'active-model-card' : ''}`}
+            key={model.id}
+            type="button"
+            onClick={() => onSelectModel(model.id)}
+          >
             <div>
               <span className="model-logo"><Icon size={20} /></span>
               <Tag tone={active ? 'green' : 'neutral'}>{status}</Tag>
             </div>
-            <h3>{title}</h3>
-            <p>{copy}</p>
+            <h3>{model.title}</h3>
+            <p>{model.copy}</p>
             <footer>
-              <span>{size}</span>
-              <strong>{lane}</strong>
+              <span>{model.size}</span>
+              <strong>{model.lane}</strong>
+              <span className="model-action">{active ? 'Selected' : 'Use model'}</span>
             </footer>
-          </article>
-        ))}
+          </button>
+          );
+        })}
       </div>
     </section>
   );

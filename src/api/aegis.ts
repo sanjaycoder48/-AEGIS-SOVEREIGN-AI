@@ -1,4 +1,4 @@
-import type { AuditEvent, ChatResponse, HealthStatus, VaultDocument } from '../types';
+import type { AuditEvent, ChatResponse, HealthStatus, ModelId, VaultDocument } from '../types';
 
 const API_BASE = import.meta.env.VITE_AEGIS_API_BASE ?? (location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '');
 
@@ -48,10 +48,10 @@ export function uploadDocument(file: File): Promise<VaultDocument> {
   });
 }
 
-export function askQuestion(question: string, documentIds: string[]): Promise<ChatResponse> {
+export function askQuestion(question: string, documentIds: string[], modelId?: ModelId): Promise<ChatResponse> {
   return fetchJson<ChatResponse>('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, document_ids: documentIds }),
+    body: JSON.stringify({ question, document_ids: documentIds, model_id: modelId }),
   });
 }

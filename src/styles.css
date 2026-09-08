@@ -40,6 +40,14 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
+.visually-hidden-input {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .app-shell {
   min-height: 100vh;
   display: grid;
@@ -1077,6 +1085,12 @@ main {
   border: 1px solid #34585d;
   background: #101b1f;
   color: #d3e0de;
+  text-decoration: none;
+}
+
+.outline-action[aria-disabled="true"] {
+  opacity: .55;
+  cursor: not-allowed;
 }
 
 .table-card {
@@ -1118,6 +1132,32 @@ td small {
   color: #789093;
 }
 
+tr.selected-row td {
+  background: rgba(57, 216, 181, .035);
+}
+
+.row-action {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid #34585d;
+  border-radius: 7px;
+  background: #101b1f;
+  color: #d3e0de;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.row-action:hover,
+.row-action:focus-visible {
+  border-color: rgba(57, 216, 181, .62);
+  color: var(--teal-2);
+}
+
 .tag {
   display: inline-block;
   padding: 5px 7px;
@@ -1152,6 +1192,18 @@ td small {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: linear-gradient(145deg, #101b1f, #0b1316);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .2s, transform .2s, background .2s;
+}
+
+.model-card:hover,
+.model-card:focus-visible {
+  border-color: rgba(57, 216, 181, .62);
+  background: linear-gradient(145deg, #122226, #0b1619);
+  outline: none;
+  transform: translateY(-2px);
 }
 
 .model-card.active-model-card {
@@ -1195,6 +1247,12 @@ td small {
 
 .model-card footer strong {
   color: #c7d4d2;
+}
+
+.model-action {
+  margin-left: auto;
+  color: var(--teal-2);
+  font-weight: 800;
 }
 
 .empty-state {

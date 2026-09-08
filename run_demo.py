@@ -5,9 +5,11 @@ Use this when package installation or Ollama is unavailable:
 """
 from __future__ import annotations
 
+import csv
 from email.parser import BytesParser
 from email.policy import default
 import hashlib
+import io
 import json
 import mimetypes
 import re
@@ -25,6 +27,13 @@ DATA = ROOT / "runtime_data"
 UPLOADS = DATA / "uploads"
 DB_PATH = DATA / "aegis.db"
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+TEXT_MODEL = "qwen2.5:7b"
+VISION_MODEL = "qwen2.5vl:7b"
+CODE_MODEL = "deepseek-coder:6.7b"
+MODEL_ROUTES = {
+    VISION_MODEL: "Visual inspection",
+    CODE_MODEL: "Code analysis",
+}
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
@@ -77,6 +86,17 @@ def write_audit(action, resource, result):
         db.execute("INSERT INTO audit(timestamp,action,resource,result,hash) VALUES(?,?,?,?,?)", (stamp, action, resource, result, digest))
 
 
+def audit_rows_to_csv(rows):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["timestamp", "actor", "action", "resource", "result", "hash"])
+    for row in rows:
+        action = row["action"] or ""
+        actor = "Vault service" if action == "DOCUMENT_INDEXED" else "Secure Operator"
+        writer.writerow([row["timestamp"], actor, action.replace("_", " ").title(), row["resource"], row["result"], row["hash"] or ""])
+    return output.getvalue().encode()
+
+
 def display_title(value):
     text = re.sub(r"\s+", " ", str(value or "").replace("_", " ")).strip()
     return text.title() if text and text == text.lower() else text
@@ -127,15 +147,19 @@ def ensure_sample_document():
     write_audit("DOCUMENT_INDEXED", sample.name, "SEEDED")
 
 
-def select_model(question):
+def select_model(question, requested_model=None):
+    requested = str(requested_model or "").strip()
+    if requested in MODEL_ROUTES:
+        return requested, MODEL_ROUTES[requested]
+
     lowered = question.lower()
     if any(word in lowered for word in ("drawing", "diagram", "scan", "image", "p&id")):
-        return "qwen2.5vl:7b", "Visual inspection"
+        return VISION_MODEL, "Visual inspection"
     if any(word in lowered for word in ("code", "script", "function", "bug")):
-        return "deepseek-coder:6.7b", "Code analysis"
+        return CODE_MODEL, "Code analysis"
     if any(word in lowered for word in ("draft", "approval", "memo", "note")):
-        return "qwen2.5:7b", "Controlled drafting"
-    return "qwen2.5:7b", "Document risk analysis"
+        return TEXT_MODEL, "Controlled drafting"
+    return TEXT_MODEL, "Document risk analysis"
 
 
 def relevant_context(question, document_ids):
@@ -234,6 +258,17 @@ class Handler(SimpleHTTPRequestHandler):
         for header, value in SECURITY_HEADERS.items():
             self.send_header(header, value)
 
+    def send_csv(self, rows):
+        body = audit_rows_to_csv(rows)
+        filename = f"aegis_audit_{datetime.now(timezone.utc).date().isoformat()}.csv"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/csv; charset=utf-8")
+        self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+        self.send_header("Content-Length", str(len(body)))
+        self.send_security_headers()
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -261,6 +296,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/audit":
             with connection() as db:
                 return self.send_json([dict(row) for row in db.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100")])
+        if path == "/api/audit/export":
+            with connection() as db:
+                return self.send_csv(db.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100").fetchall())
         target = DIST / ("index.html" if path == "/" else path.lstrip("/"))
         if not target.is_file() or DIST not in target.resolve().parents:
             return self.send_error(404)
@@ -316,7 +354,7 @@ class Handler(SimpleHTTPRequestHandler):
         if not question:
             return self.send_json({"detail": "Question required"}, 400)
         started = time.perf_counter()
-        model, route = select_model(question)
+        model, route = select_model(question, body.get("model_id"))
         document_ids = body.get("document_ids") if isinstance(body.get("document_ids"), list) else []
         context, citations = relevant_context(question, [str(item) for item in document_ids])
         answer = deterministic_answer(question, context)

@@ -4,6 +4,19 @@ export type MessageRole = 'agent' | 'user';
 
 export type EngineMode = 'presentation' | 'ollama' | 'browser-demo' | 'safe-demo-fallback';
 
+export type ModelId = 'qwen2.5:7b' | 'qwen2.5vl:7b' | 'deepseek-coder:6.7b';
+
+export type ModelLane = 'Text' | 'Vision' | 'Code';
+
+export interface ModelOption {
+  id: ModelId;
+  title: string;
+  copy: string;
+  size: string;
+  lane: ModelLane;
+  route: string;
+}
+
 export interface HealthStatus {
   status: string;
   ollama: boolean;

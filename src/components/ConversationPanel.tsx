@@ -2,7 +2,7 @@ import { Activity, ArrowUp, Copy, FileText } from 'lucide-react';
 import type { FormEvent } from 'react';
 import { useEffect, useRef } from 'react';
 import { SUGGESTED_QUESTIONS } from '../lib/constants';
-import type { ChatMessage, HealthStatus, VaultDocument } from '../types';
+import type { ChatMessage, HealthStatus, ModelOption, VaultDocument } from '../types';
 import { AnswerRenderer } from './AnswerRenderer';
 
 export function ConversationPanel({
@@ -10,6 +10,7 @@ export function ConversationPanel({
   health,
   messages,
   prompt,
+  selectedModel,
   selectedDocuments,
   onCopy,
   onPromptChange,
@@ -19,6 +20,7 @@ export function ConversationPanel({
   health: HealthStatus | null;
   messages: ChatMessage[];
   prompt: string;
+  selectedModel: ModelOption;
   selectedDocuments: VaultDocument[];
   onCopy: (message: string) => void;
   onPromptChange: (value: string) => void;
@@ -50,7 +52,7 @@ export function ConversationPanel({
         </div>
         <div className="model-chip">
           <span>MODEL</span>
-          <strong>{health?.ollama ? 'qwen2.5:7b live' : 'qwen2.5:7b fallback'}</strong>
+          <strong>{selectedModel.title} {health?.ollama ? 'live' : 'fallback'}</strong>
         </div>
       </div>
 

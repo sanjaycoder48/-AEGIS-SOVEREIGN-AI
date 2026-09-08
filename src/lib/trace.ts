@@ -10,10 +10,10 @@ export function initialTrace(): TraceStep[] {
   ];
 }
 
-export function runningTrace(question: string, sourceCount: number): TraceStep[] {
+export function runningTrace(question: string, sourceCount: number, route?: string): TraceStep[] {
   return [
     { label: 'Policy gate', title: 'Access verified', detail: 'Engineering L3 - read only', duration: '12 ms', status: 'complete' },
-    { label: 'Router', title: routeForPrompt(question), detail: 'Task policy matched', duration: '31 ms', status: 'complete' },
+    { label: 'Router', title: route || routeForPrompt(question), detail: 'Task policy matched', duration: '31 ms', status: 'complete' },
     { label: 'Retrieval', title: 'Searching local index', detail: `${sourceCount || 1} source window`, status: 'running' },
     { label: 'Inference', title: 'Queued locally', detail: 'No external API', status: 'standby' },
   ];

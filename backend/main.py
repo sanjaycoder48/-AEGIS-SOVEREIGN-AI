@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -14,7 +16,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -28,6 +30,15 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate")
 TEXT_MODEL = os.getenv("AEGIS_TEXT_MODEL", "qwen2.5:7b")
 VISION_MODEL = os.getenv("AEGIS_VISION_MODEL", "qwen2.5vl:7b")
 CODE_MODEL = os.getenv("AEGIS_CODE_MODEL", "deepseek-coder:6.7b")
+MODEL_ALIASES = {
+    "qwen2.5:7b": TEXT_MODEL,
+    "qwen2.5vl:7b": VISION_MODEL,
+    "deepseek-coder:6.7b": CODE_MODEL,
+}
+MODEL_ROUTES = {
+    "qwen2.5vl:7b": "Visual inspection",
+    "deepseek-coder:6.7b": "Code analysis",
+}
 
 DATA.mkdir(exist_ok=True)
 UPLOADS.mkdir(exist_ok=True)
@@ -64,6 +75,16 @@ def audit(action: str, resource: str, result: str) -> None:
     digest = hashlib.sha256(f"{previous}|{timestamp}|{action}|{resource}|{result}".encode()).hexdigest()
     with db() as connection:
         connection.execute("INSERT INTO audit(timestamp, action, resource, result, hash) VALUES(?,?,?,?,?)", (timestamp, action, resource, result, digest))
+
+def audit_rows_to_csv(rows: list[sqlite3.Row]) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["timestamp", "actor", "action", "resource", "result", "hash"])
+    for row in rows:
+        action = row["action"] or ""
+        actor = "Vault service" if action == "DOCUMENT_INDEXED" else "Secure Operator"
+        writer.writerow([row["timestamp"], actor, action.replace("_", " ").title(), row["resource"], row["result"], row["hash"] or ""])
+    return output.getvalue()
 
 def display_title(value: str) -> str:
     text = re.sub(r"\s+", " ", str(value or "").replace("_", " ")).strip()
@@ -118,7 +139,11 @@ def extract_text(path: Path, extension: str) -> tuple[str, int]:
             return "Scanned or protected PDF. OCR/vision model routing required.", 1
     raise HTTPException(415, "Unsupported document type")
 
-def select_model(question: str) -> tuple[str, str]:
+def select_model(question: str, requested_model: str | None = None) -> tuple[str, str]:
+    requested = str(requested_model or "").strip()
+    if requested in MODEL_ROUTES:
+        return MODEL_ALIASES[requested], MODEL_ROUTES[requested]
+
     lowered = question.lower()
     if any(word in lowered for word in ("drawing", "diagram", "scan", "image", "p&id")):
         return VISION_MODEL, "Visual inspection"
@@ -198,6 +223,7 @@ def run_ollama(model: str, question: str, context: str) -> str:
 class ChatRequest(BaseModel):
     question: str
     document_ids: list[str] = []
+    model_id: str | None = None
 
 ensure_sample_document()
 
@@ -251,7 +277,7 @@ def chat(body: ChatRequest):
         else:
             rows = connection.execute("SELECT * FROM documents ORDER BY created_at DESC LIMIT 5").fetchall()
     context, citations = relevant_context(body.question, rows)
-    model, route = select_model(body.question)
+    model, route = select_model(body.question, body.model_id)
     if not context.strip():
         context = "Demo safety review: Emergency shutdown interlock test incomplete. Pressure relief valve certification overdue. Elevated vibration may indicate coupling misalignment. Startup requires Process Safety sign-off."
         citations = [{"document": "P-4107 Safety Review", "location": "demo extract"}]
@@ -269,6 +295,17 @@ def chat(body: ChatRequest):
 def get_audit():
     with db() as connection:
         return [dict(row) for row in connection.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100")]
+
+@app.get("/api/audit/export")
+def export_audit():
+    with db() as connection:
+        rows = connection.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100").fetchall()
+    filename = f"aegis_audit_{datetime.now(timezone.utc).date().isoformat()}.csv"
+    return Response(
+        content=audit_rows_to_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 @app.get("/")
 def index():

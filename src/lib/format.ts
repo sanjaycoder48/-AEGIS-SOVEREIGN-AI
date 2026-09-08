@@ -1,4 +1,5 @@
 import type { ChatResponse, EngineMode } from '../types';
+import { DEFAULT_MODEL_ID, modelById } from './constants';
 
 export interface AnswerBlock {
   id: string;
@@ -100,14 +101,16 @@ export function csvCell(value: unknown): string {
   return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-export function demoAnswer(prompt: string): ChatResponse {
+export function demoAnswer(prompt: string, modelId = DEFAULT_MODEL_ID): ChatResponse {
   const lowered = prompt.toLowerCase();
+  const model = modelById(modelId);
+  const route = model.id === DEFAULT_MODEL_ID ? routeForPrompt(prompt) : model.route;
   const citations = [
     { document: 'P-4107 Safety Review', location: 'section 2' },
     { document: 'P-4107 Safety Review', location: 'section 3' },
   ];
   const base = {
-    model: 'qwen2.5:7b',
+    model: model.id,
     elapsed_ms: 790,
     mode: 'browser-demo' as EngineMode,
     egress_bytes: 0,
@@ -117,7 +120,7 @@ export function demoAnswer(prompt: string): ChatResponse {
   if (/action|unresolved|owner|todo|open/.test(lowered)) {
     return {
       ...base,
-      route: 'Document risk analysis',
+      route,
       answer:
         '### Unresolved action items\n' +
         '- F-01 HIGH: Complete witnessed ESD-4107 interlock testing. Owner: Instrumentation. Due: before commissioning.\n' +
@@ -130,7 +133,7 @@ export function demoAnswer(prompt: string): ChatResponse {
   if (/approval|draft|memo|note/.test(lowered)) {
     return {
       ...base,
-      route: 'Controlled drafting',
+      route,
       answer:
         '### Draft approval note\n' +
         'Startup approval for P-4107 should remain conditional because two high-priority safeguards are still open.\n' +
@@ -143,7 +146,7 @@ export function demoAnswer(prompt: string): ChatResponse {
 
   return {
     ...base,
-    route: routeForPrompt(prompt),
+    route,
     answer:
       '### Critical findings\n' +
       'The review identifies **three high-priority or time-bound risks** requiring action before commissioning.\n' +
