@@ -1,4 +1,4 @@
-import { Activity, ArrowUp, Copy, FileText } from 'lucide-react';
+import { Activity, AlertTriangle, ArrowUp, Copy, FileText } from 'lucide-react';
 import type { FormEvent } from 'react';
 import { useEffect, useRef } from 'react';
 import { SUGGESTED_QUESTIONS } from '../lib/constants';
@@ -143,12 +143,17 @@ function MessageBubble({ message, onCopy }: { message: ChatMessage; onCopy: (mes
             {!message.isPending && !message.isError && (
               <div className="answer-actions">
                 <div className="citations">
-                  {(message.citations || []).map((citation) => (
+                  {message.citations?.length ? message.citations.map((citation) => (
                     <span className="citation" key={`${citation.document}-${citation.location}`}>
                       <FileText size={13} />
                       {citation.document} - {citation.location}
                     </span>
-                  ))}
+                  )) : (
+                    <span className="no-evidence">
+                      <AlertTriangle size={13} />
+                      NO SUPPORTING EVIDENCE
+                    </span>
+                  )}
                 </div>
                 <button className="copy-answer" type="button" onClick={copyAnswer}>
                   <Copy size={14} />

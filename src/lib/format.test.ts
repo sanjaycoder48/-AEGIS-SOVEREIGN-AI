@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { displayTitle, formatBytes, parseAnswer, routeForPrompt } from './format';
+import { displayTitle, formatBytes, parseAnswer, parseFinding, routeForPrompt } from './format';
 
 describe('format utilities', () => {
   it('formats compact file sizes', () => {
@@ -21,5 +21,39 @@ describe('format utilities', () => {
   it('parses answer headings, paragraphs and lists', () => {
     const blocks = parseAnswer('### Heading\nIntro\n- one\n- two');
     expect(blocks.map((block) => block.kind)).toEqual(['heading', 'paragraph', 'list']);
+  });
+});
+
+describe('review findings', () => {
+  it('reads the id, severity and text out of a finding line', () => {
+    expect(parseFinding('F-02 HIGH: Relief valve certification expired.')).toEqual({
+      id: 'F-02',
+      severity: 'high',
+      text: 'Relief valve certification expired.',
+    });
+  });
+
+  it('maps each severity word, treating CRITICAL as high', () => {
+    expect(parseFinding('F-01 MEDIUM: Vibration elevated.')?.severity).toBe('medium');
+    expect(parseFinding('F-03 low: Label missing.')?.severity).toBe('low');
+    expect(parseFinding('F-04 CRITICAL: Interlock bypassed.')?.severity).toBe('high');
+  });
+
+  it('ignores lines that are not findings', () => {
+    expect(parseFinding('Hold startup until Process Safety signs off.')).toBeNull();
+  });
+
+  it('renders a severity-encoded block when every bullet is a finding', () => {
+    const blocks = parseAnswer(
+      '- F-01 HIGH: Interlock test incomplete.\n- F-03 MEDIUM: Vibration elevated.',
+    );
+
+    expect(blocks.map((block) => block.kind)).toEqual(['findings']);
+    expect(blocks[0]?.findings?.map((finding) => finding.severity)).toEqual(['high', 'medium']);
+  });
+
+  it('falls back to a plain list when the bullets are mixed', () => {
+    const blocks = parseAnswer('- F-01 HIGH: Interlock test incomplete.\n- Renew the permit.');
+    expect(blocks.map((block) => block.kind)).toEqual(['list']);
   });
 });

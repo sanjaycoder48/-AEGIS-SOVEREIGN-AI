@@ -1,11 +1,37 @@
 import type { ChatResponse, EngineMode } from '../types';
 import { DEFAULT_MODEL_ID, modelById } from './constants';
 
+export type FindingSeverity = 'high' | 'medium' | 'low';
+
+export interface Finding {
+  id: string;
+  severity: FindingSeverity;
+  text: string;
+}
+
 export interface AnswerBlock {
   id: string;
-  kind: 'heading' | 'paragraph' | 'list';
+  kind: 'heading' | 'paragraph' | 'list' | 'findings';
   text?: string;
   items?: string[];
+  findings?: Finding[];
+}
+
+/** Matches the review convention the documents use: "F-01 HIGH: ...". */
+const FINDING_PATTERN = /^(F-\d+)\s+(CRITICAL|HIGH|MEDIUM|LOW)\s*[:.]\s*(.+)$/i;
+
+export function parseFinding(line: string): Finding | null {
+  const match = FINDING_PATTERN.exec(line.trim());
+  if (!match) return null;
+
+  const [, id, rawSeverity, text] = match;
+  const severity = (rawSeverity ?? '').toLowerCase();
+
+  return {
+    id: id ?? '',
+    severity: severity === 'medium' ? 'medium' : severity === 'low' ? 'low' : 'high',
+    text: text ?? '',
+  };
 }
 
 export function formatBytes(bytes = 0): string {
@@ -64,10 +90,18 @@ export function parseAnswer(value = ''): AnswerBlock[] {
   let listItems: string[] = [];
 
   const flushList = () => {
-    if (listItems.length) {
+    if (!listItems.length) return;
+
+    // A list of review findings carries severity, so it is rendered as a
+    // severity-encoded block rather than as plain bullets.
+    const findings = listItems.map(parseFinding);
+    if (findings.every((finding): finding is Finding => finding !== null)) {
+      blocks.push({ id: `findings-${blocks.length}`, kind: 'findings', findings });
+    } else {
       blocks.push({ id: `list-${blocks.length}`, kind: 'list', items: listItems });
-      listItems = [];
     }
+
+    listItems = [];
   };
 
   value.split(/\r?\n/).forEach((line) => {

@@ -1,4 +1,11 @@
 import { parseAnswer } from '../lib/format';
+import type { Finding } from '../lib/format';
+
+const SEVERITY_LABEL: Record<Finding['severity'], string> = {
+  high: 'HIGH',
+  medium: 'MEDIUM',
+  low: 'LOW',
+};
 
 export function AnswerRenderer({ text }: { text: string }) {
   const blocks = parseAnswer(text);
@@ -7,6 +14,21 @@ export function AnswerRenderer({ text }: { text: string }) {
     <>
       {blocks.map((block) => {
         if (block.kind === 'heading') return <h3 key={block.id}>{block.text}</h3>;
+
+        if (block.kind === 'findings') {
+          return (
+            <div className="findings" key={block.id}>
+              {(block.findings || []).map((finding) => (
+                <div className={`finding-row sev-${finding.severity}`} key={finding.id}>
+                  <span className="f-id">{finding.id}</span>
+                  <span className="f-sev">{SEVERITY_LABEL[finding.severity]}</span>
+                  <span><InlineRichText text={finding.text} /></span>
+                </div>
+              ))}
+            </div>
+          );
+        }
+
         if (block.kind === 'list') {
           return (
             <ul key={block.id}>
@@ -16,6 +38,7 @@ export function AnswerRenderer({ text }: { text: string }) {
             </ul>
           );
         }
+
         return <p key={block.id}><InlineRichText text={block.text || ''} /></p>;
       })}
     </>
