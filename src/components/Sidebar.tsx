@@ -1,7 +1,7 @@
-import { Boxes, Database, FileCheck2, LayoutDashboard, LockKeyhole, ShieldCheck } from 'lucide-react';
+import { Boxes, Database, FileCheck2, LayoutDashboard, LogOut, ShieldCheck } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { VIEW_LABELS } from '../lib/constants';
-import type { ViewKey } from '../types';
+import type { AuthUser, ViewKey } from '../types';
 
 const NAV_ITEMS: Array<{ key: ViewKey; label: string; icon: LucideIcon }> = [
   { key: 'workspace', label: VIEW_LABELS.workspace, icon: LayoutDashboard },
@@ -14,10 +14,14 @@ export function Sidebar({
   activeView,
   isOpen,
   onNavigate,
+  onLogout,
+  user,
 }: {
   activeView: ViewKey;
   isOpen: boolean;
   onNavigate: (view: ViewKey) => void;
+  onLogout: () => void;
+  user: AuthUser;
 }) {
   return (
     <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
@@ -59,12 +63,12 @@ export function Sidebar({
           </div>
         </div>
         <div className="operator">
-          <div className="avatar">SK</div>
+          <div className="avatar">{user.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase()}</div>
           <div>
-            <strong>Secure Operator</strong>
-            <small>Engineering - L3</small>
+            <strong>{user.name}</strong>
+            <small>@{user.username}</small>
           </div>
-          <LockKeyhole size={16} />
+          <button className="operator-logout" type="button" title="Lock vault" aria-label="Lock vault" onClick={onLogout}><LogOut size={16} /></button>
         </div>
       </div>
     </aside>

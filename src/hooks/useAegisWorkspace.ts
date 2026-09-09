@@ -19,7 +19,7 @@ export function normalizeSelection(current: Set<string>, documents: VaultDocumen
   return next;
 }
 
-export function useAegisWorkspace() {
+export function useAegisWorkspace(enabled = true) {
   const [activeView, setActiveView] = useState<ViewKey>('workspace');
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [busy, setBusy] = useState(false);
@@ -103,13 +103,33 @@ export function useAegisWorkspace() {
   }, [refreshAudit, refreshDocuments, refreshHealth]);
 
   useEffect(() => {
+    if (!enabled) return;
     const initialLoad = window.setTimeout(() => void refreshAll(), 0);
     const healthPoll = window.setInterval(() => void refreshHealth(), 20000);
     return () => {
       window.clearTimeout(initialLoad);
       window.clearInterval(healthPoll);
     };
-  }, [refreshAll, refreshHealth]);
+  }, [enabled, refreshAll, refreshHealth]);
+
+  const clearWorkspace = useCallback(() => {
+    setActiveView('workspace');
+    setAudit([]);
+    setBusy(false);
+    setDocumentSearch('');
+    setDocuments([]);
+    setDragActive(false);
+    setMessages([]);
+    setMobileOpen(false);
+    setOfflineDemo(false);
+    setPrompt('');
+    setSelectedModelId(DEFAULT_MODEL_ID);
+    setSelectedIds(new Set());
+    setHealth(null);
+    setLastEgressBytes(0);
+    setTrace(initialTrace());
+    setUploading(false);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -270,21 +290,20 @@ export function useAegisWorkspace() {
   ]);
 
   const exportAudit = useCallback(async () => {
-    let rows = audit;
     try {
-      rows = await getAudit();
+      const rows = await getAudit();
       setAudit(rows);
+
+      if (!rows.length) {
+        showToast('No audit events to export');
+        return;
+      }
+
+      showToast('Audit log export started');
     } catch {
       showToast('Audit service is not reachable');
     }
-
-    if (!rows.length) {
-      showToast('No audit events to export');
-      return;
-    }
-
-    showToast('Audit log export started');
-  }, [audit, showToast]);
+  }, [showToast]);
 
   return {
     activeView,
@@ -292,6 +311,7 @@ export function useAegisWorkspace() {
     auditCount: audit.length || health?.audit_events || 0,
     busy,
     chunkTotal,
+    clearWorkspace,
     documentSearch,
     documents,
     dragActive,

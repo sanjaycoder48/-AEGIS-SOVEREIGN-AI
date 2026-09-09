@@ -17,6 +17,17 @@ export interface ModelOption {
   route: string;
 }
 
+export interface AuthUser {
+  id: string;
+  name: string;
+  username: string;
+}
+
+export interface AuthSession {
+  token: string;
+  user: AuthUser;
+}
+
 export interface HealthStatus {
   status: string;
   ollama: boolean;

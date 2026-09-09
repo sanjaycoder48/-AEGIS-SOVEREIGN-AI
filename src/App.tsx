@@ -1,3 +1,6 @@
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { getCurrentUser, logoutAccount, sessionStore } from './api/aegis';
+import { AuthGate } from './components/AuthGate';
 import { AuditView, DocumentsView, ModelsView } from './components/DataViews';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Sidebar } from './components/Sidebar';
@@ -6,11 +9,12 @@ import { Topbar } from './components/Topbar';
 import { WorkspaceView } from './components/WorkspaceView';
 import { useAegisWorkspace } from './hooks/useAegisWorkspace';
 import { ACCEPTED_UPLOADS } from './lib/constants';
-import type { ChangeEvent } from 'react';
-import { useRef } from 'react';
+import type { AuthUser } from './types';
 
 function App() {
-  const workspace = useAegisWorkspace();
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [checkingSession, setCheckingSession] = useState(() => Boolean(sessionStore.get()));
+  const workspace = useAegisWorkspace(Boolean(user));
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const openUploadPicker = () => uploadInputRef.current?.click();
@@ -18,6 +22,26 @@ function App() {
     void workspace.handleUpload(event.target.files?.[0]);
     event.target.value = '';
   };
+
+  useEffect(() => {
+    if (!sessionStore.get()) {
+      return;
+    }
+    void getCurrentUser()
+      .then(setUser)
+      .catch(() => sessionStore.clear())
+      .finally(() => setCheckingSession(false));
+  }, []);
+
+  async function logout() {
+    try { await logoutAccount(); } catch { /* A local lock must always succeed. */ }
+    sessionStore.clear();
+    workspace.clearWorkspace();
+    setUser(null);
+  }
+
+  if (checkingSession) return <div className="auth-shell"><div className="auth-loader"><span className="pulse" /> Verifying local session...</div></div>;
+  if (!user) return <AuthGate onAuthenticated={setUser} />;
 
   return (
     <ErrorBoundary>
@@ -31,7 +55,7 @@ function App() {
         onChange={handleHiddenUpload}
       />
       <div className="app-shell">
-        <Sidebar activeView={workspace.activeView} isOpen={workspace.mobileOpen} onNavigate={workspace.setView} />
+        <Sidebar activeView={workspace.activeView} isOpen={workspace.mobileOpen} onNavigate={workspace.setView} onLogout={logout} user={user} />
         <main>
           <Topbar
             activeView={workspace.activeView}

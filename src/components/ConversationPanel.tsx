@@ -79,7 +79,7 @@ export function ConversationPanel({
           }}
         />
         <div className="composer-footer">
-          <span><b>Ctrl Enter</b> to run agent</span>
+          <span><b>{selectedDocuments.length}</b> active local source{selectedDocuments.length === 1 ? '' : 's'}</span>
           <button type="submit" aria-label="Send question" disabled={busy || !prompt.trim()}>
             <ArrowUp size={18} />
           </button>

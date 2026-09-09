@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -14,7 +15,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -48,7 +49,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^http://(127\.0\.0\.1|localhost)(:\d+)?$",
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 @app.middleware("http")
@@ -65,16 +66,52 @@ def db() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, filename TEXT, title TEXT, content TEXT, chunks INTEGER, created_at TEXT)")
     connection.execute("CREATE TABLE IF NOT EXISTS audit (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT, action TEXT, resource TEXT, result TEXT, hash TEXT)")
+    connection.execute("CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL UNIQUE COLLATE NOCASE, password_hash TEXT NOT NULL, salt TEXT NOT NULL, created_at TEXT NOT NULL)")
+    connection.execute("CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at TEXT NOT NULL, FOREIGN KEY(user_id) REFERENCES users(id))")
+    document_columns = {row["name"] for row in connection.execute("PRAGMA table_info(documents)")}
+    audit_columns = {row["name"] for row in connection.execute("PRAGMA table_info(audit)")}
+    if "owner_id" not in document_columns:
+        connection.execute("ALTER TABLE documents ADD COLUMN owner_id TEXT")
+    if "user_id" not in audit_columns:
+        connection.execute("ALTER TABLE audit ADD COLUMN user_id TEXT")
     return connection
 
-def audit(action: str, resource: str, result: str) -> None:
+def password_digest(password: str, salt: bytes) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 240_000).hex()
+
+def public_user(row: sqlite3.Row) -> dict:
+    return {"id": row["id"], "name": row["name"], "username": row["username"]}
+
+def issue_session(user_id: str) -> str:
+    token = f"aegis_{uuid.uuid4().hex}{uuid.uuid4().hex}"
+    with db() as connection:
+        connection.execute(
+            "INSERT INTO sessions(token_hash,user_id,created_at) VALUES(?,?,?)",
+            (hashlib.sha256(token.encode()).hexdigest(), user_id, datetime.now(timezone.utc).isoformat()),
+        )
+    return token
+
+def current_user(authorization: str | None = Header(default=None)) -> sqlite3.Row:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Sign in to unlock this vault")
+    token_hash = hashlib.sha256(authorization[7:].strip().encode()).hexdigest()
+    with db() as connection:
+        row = connection.execute(
+            "SELECT users.* FROM sessions JOIN users ON users.id=sessions.user_id WHERE sessions.token_hash=?",
+            (token_hash,),
+        ).fetchone()
+    if not row:
+        raise HTTPException(401, "Session expired. Sign in again")
+    return row
+
+def audit(action: str, resource: str, result: str, user_id: str | None = None) -> None:
     timestamp = datetime.now(timezone.utc).isoformat()
     with db() as connection:
-        row = connection.execute("SELECT hash FROM audit ORDER BY id DESC LIMIT 1").fetchone()
+        row = connection.execute("SELECT hash FROM audit WHERE user_id IS ? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
     previous = row["hash"] if row else ""
     digest = hashlib.sha256(f"{previous}|{timestamp}|{action}|{resource}|{result}".encode()).hexdigest()
     with db() as connection:
-        connection.execute("INSERT INTO audit(timestamp, action, resource, result, hash) VALUES(?,?,?,?,?)", (timestamp, action, resource, result, digest))
+        connection.execute("INSERT INTO audit(timestamp, action, resource, result, hash, user_id) VALUES(?,?,?,?,?,?)", (timestamp, action, resource, result, digest, user_id))
 
 def audit_rows_to_csv(rows: list[sqlite3.Row]) -> str:
     output = io.StringIO()
@@ -115,7 +152,7 @@ def ensure_sample_document() -> None:
         content = sample.read_text(encoding="utf-8", errors="ignore")
         chunks = max(1, (len(content) + 999) // 1000)
         connection.execute(
-            "INSERT INTO documents VALUES(?,?,?,?,?,?)",
+            "INSERT INTO documents(id,filename,title,content,chunks,created_at,owner_id) VALUES(?,?,?,?,?,?,NULL)",
             (
                 "sample-p4107",
                 sample.name,
@@ -225,28 +262,82 @@ class ChatRequest(BaseModel):
     document_ids: list[str] = []
     model_id: str | None = None
 
+class AuthRequest(BaseModel):
+    username: str
+    password: str
+
+class RegisterRequest(AuthRequest):
+    name: str
+
 ensure_sample_document()
 
 @app.get("/api/health")
-def health():
+def health(user: sqlite3.Row = Depends(current_user)):
     try:
         urllib.request.urlopen("http://127.0.0.1:11434/api/tags", timeout=1)
         ollama = True
     except Exception:
         ollama = False
     with db() as connection:
-        documents = connection.execute("SELECT COUNT(*) AS total FROM documents").fetchone()["total"]
-        audit_events = connection.execute("SELECT COUNT(*) AS total FROM audit").fetchone()["total"]
+        documents = connection.execute("SELECT COUNT(*) AS total FROM documents WHERE owner_id=?", (user["id"],)).fetchone()["total"]
+        audit_events = connection.execute("SELECT COUNT(*) AS total FROM audit WHERE user_id=?", (user["id"],)).fetchone()["total"]
     return {"status": "secure", "network_egress": "blocked-by-design", "ollama": ollama, "documents": documents, "audit_events": audit_events}
 
-@app.get("/api/documents")
-def get_documents():
+@app.get("/api/auth/status")
+def auth_status():
     with db() as connection:
-        rows = connection.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
+        return {"setup_required": connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0}
+
+@app.post("/api/auth/register")
+def register(body: RegisterRequest):
+    name, username = body.name.strip(), body.username.strip().lower()
+    if len(name) < 2 or not re.fullmatch(r"[a-z0-9._-]{3,32}", username):
+        raise HTTPException(400, "Use a name and a 3-32 character username")
+    if len(body.password) < 8:
+        raise HTTPException(400, "Password must contain at least 8 characters")
+    salt = os.urandom(16)
+    user_id = str(uuid.uuid4())
+    try:
+        with db() as connection:
+            connection.execute("INSERT INTO users VALUES(?,?,?,?,?,?)", (user_id, name, username, password_digest(body.password, salt), salt.hex(), datetime.now(timezone.utc).isoformat()))
+            connection.execute("UPDATE documents SET owner_id=? WHERE owner_id IS NULL", (user_id,))
+            connection.execute("UPDATE audit SET user_id=? WHERE user_id IS NULL", (user_id,))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, "Username already exists") from None
+    token = issue_session(user_id)
+    audit("ACCOUNT_CREATED", username, "SUCCESS", user_id)
+    return {"token": token, "user": {"id": user_id, "name": name, "username": username}}
+
+@app.post("/api/auth/login")
+def login(body: AuthRequest):
+    with db() as connection:
+        row = connection.execute("SELECT * FROM users WHERE username=?", (body.username.strip().lower(),)).fetchone()
+    if not row or not hmac.compare_digest(row["password_hash"], password_digest(body.password, bytes.fromhex(row["salt"]))):
+        raise HTTPException(401, "Invalid username or password")
+    token = issue_session(row["id"])
+    audit("SESSION_STARTED", row["username"], "SUCCESS", row["id"])
+    return {"token": token, "user": public_user(row)}
+
+@app.get("/api/auth/me")
+def me(user: sqlite3.Row = Depends(current_user)):
+    return public_user(user)
+
+@app.post("/api/auth/logout")
+def logout(authorization: str | None = Header(default=None), user: sqlite3.Row = Depends(current_user)):
+    token_hash = hashlib.sha256((authorization or "")[7:].strip().encode()).hexdigest()
+    audit("SESSION_ENDED", user["username"], "SUCCESS", user["id"])
+    with db() as connection:
+        connection.execute("DELETE FROM sessions WHERE token_hash=?", (token_hash,))
+    return {"ok": True}
+
+@app.get("/api/documents")
+def get_documents(user: sqlite3.Row = Depends(current_user)):
+    with db() as connection:
+        rows = connection.execute("SELECT * FROM documents WHERE owner_id=? ORDER BY created_at DESC", (user["id"],)).fetchall()
     return [document_payload(row) for row in rows]
 
 @app.post("/api/documents/upload")
-async def upload_document(file: UploadFile = File(...)):
+async def upload_document(file: UploadFile = File(...), user: sqlite3.Row = Depends(current_user)):
     extension = (Path(file.filename or "document").suffix[1:] or "txt").lower()
     if extension not in {"pdf", "txt", "md", "csv"}:
         raise HTTPException(415, "Use PDF, TXT, MD or CSV")
@@ -261,21 +352,21 @@ async def upload_document(file: UploadFile = File(...)):
     chunks = max(1, (len(content) + 999) // 1000)
     title = display_title(Path(safe_name).stem)
     with db() as connection:
-        connection.execute("INSERT INTO documents VALUES(?,?,?,?,?,?)", (document_id, safe_name, title, content, chunks, datetime.now(timezone.utc).isoformat()))
-    audit("DOCUMENT_INDEXED", safe_name, "SUCCESS")
+        connection.execute("INSERT INTO documents(id,filename,title,content,chunks,created_at,owner_id) VALUES(?,?,?,?,?,?,?)", (document_id, safe_name, title, content, chunks, datetime.now(timezone.utc).isoformat(), user["id"]))
+    audit("DOCUMENT_INDEXED", safe_name, "SUCCESS", user["id"])
     return {"id": document_id, "filename": safe_name, "title": title, "pages": pages, "chunks": chunks, "status": "indexed", "size_bytes": len(content_bytes), "type": extension.upper()}
 
 @app.post("/api/chat")
-def chat(body: ChatRequest):
+def chat(body: ChatRequest, user: sqlite3.Row = Depends(current_user)):
     if not body.question.strip():
         raise HTTPException(400, "Question is required")
     started = time.perf_counter()
     with db() as connection:
         if body.document_ids:
             placeholders = ",".join("?" for _ in body.document_ids)
-            rows = connection.execute(f"SELECT * FROM documents WHERE id IN ({placeholders})", body.document_ids).fetchall()
+            rows = connection.execute(f"SELECT * FROM documents WHERE owner_id=? AND id IN ({placeholders})", [user["id"], *body.document_ids]).fetchall()
         else:
-            rows = connection.execute("SELECT * FROM documents ORDER BY created_at DESC LIMIT 5").fetchall()
+            rows = connection.execute("SELECT * FROM documents WHERE owner_id=? ORDER BY created_at DESC LIMIT 5", (user["id"],)).fetchall()
     context, citations = relevant_context(body.question, rows)
     model, route = select_model(body.question, body.model_id)
     if not context.strip():
@@ -288,18 +379,18 @@ def chat(body: ChatRequest):
         answer = fallback_answer(body.question, context)
         mode = "safe-demo-fallback"
     elapsed = int((time.perf_counter() - started) * 1000)
-    audit("AGENT_QUERY", route, "ALLOWED")
+    audit("AGENT_QUERY", route, "ALLOWED", user["id"])
     return {"answer": answer, "model": model, "route": route, "citations": citations, "elapsed_ms": elapsed, "mode": mode, "egress_bytes": 0}
 
 @app.get("/api/audit")
-def get_audit():
+def get_audit(user: sqlite3.Row = Depends(current_user)):
     with db() as connection:
-        return [dict(row) for row in connection.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100")]
+        return [dict(row) for row in connection.execute("SELECT * FROM audit WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],))]
 
 @app.get("/api/audit/export")
-def export_audit():
+def export_audit(user: sqlite3.Row = Depends(current_user)):
     with db() as connection:
-        rows = connection.execute("SELECT * FROM audit ORDER BY id DESC LIMIT 100").fetchall()
+        rows = connection.execute("SELECT * FROM audit WHERE user_id=? ORDER BY id DESC LIMIT 100", (user["id"],)).fetchall()
     filename = f"aegis_audit_{datetime.now(timezone.utc).date().isoformat()}.csv"
     return Response(
         content=audit_rows_to_csv(rows),
