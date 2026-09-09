@@ -1,4 +1,4 @@
-import type { ModelId, ModelOption, VaultDocument, ViewKey } from '../types';
+import type { AuthUser, ModelId, ModelOption, VaultDocument, ViewKey } from '../types';
 
 export const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 export const ALLOWED_EXTENSIONS = ['pdf', 'txt', 'md', 'csv'] as const;
@@ -64,4 +64,11 @@ export const DEMO_DOCUMENT: VaultDocument = {
   type: 'TXT',
   status: 'indexed',
   created_at: new Date().toISOString(),
+};
+
+/** Stand-in operator for the published demo, where no local vault exists. */
+export const DEMO_USER: AuthUser = {
+  id: 'demo-operator',
+  name: 'Demo Operator',
+  username: 'demo',
 };

@@ -184,9 +184,9 @@ export function demoAnswer(prompt: string, modelId = DEFAULT_MODEL_ID): ChatResp
     answer:
       '### Critical findings\n' +
       'The review identifies **three high-priority or time-bound risks** requiring action before commissioning.\n' +
-      '- Emergency shutdown interlock testing is incomplete.\n' +
-      '- Pressure-relief valve certification is overdue.\n' +
-      '- Elevated vibration may indicate coupling misalignment.\n\n' +
+      '- F-01 HIGH: Emergency shutdown interlock ESD-4107 testing is incomplete. Owner: Instrumentation. Due: before commissioning.\n' +
+      '- F-02 HIGH: Pressure relief valve PSV-4107B certification is overdue. Owner: Inspection. Due: before commissioning.\n' +
+      '- F-03 MEDIUM: Elevated drive-end vibration may indicate coupling misalignment. Owner: Rotating Equipment. Due: within 48 hours.\n\n' +
       '**Recommended action:** Hold startup authorization until Process Safety verifies the two high-priority safeguards.',
   };
 }

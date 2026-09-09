@@ -317,6 +317,18 @@ a { color: var(--accent); }
   color: var(--muted);
 }
 
+.auth-demo { display: grid; gap: 10px; }
+
+.auth-demo .auth-submit { margin-top: 0; }
+
+.auth-demo p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
 .auth-loader {
   display: flex;
   align-items: center;

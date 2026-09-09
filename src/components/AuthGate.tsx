@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { KeyRound, LockKeyhole, ShieldCheck, UserRound } from 'lucide-react';
+import { KeyRound, LockKeyhole, MonitorPlay, ShieldCheck, UserRound } from 'lucide-react';
 import { getAuthStatus, loginAccount, registerAccount, sessionStore } from '../api/aegis';
+import { DEMO_USER } from '../lib/constants';
 import type { AuthUser } from '../types';
 
 export function AuthGate({ onAuthenticated }: { onAuthenticated: (user: AuthUser) => void }) {
@@ -10,22 +11,30 @@ export function AuthGate({ onAuthenticated }: { onAuthenticated: (user: AuthUser
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [serviceDown, setServiceDown] = useState(false);
   const checking = setupRequired === null && !error;
   const title = checking
     ? 'Checking vault access'
-    : setupRequired
-      ? 'Create the vault owner'
-      : 'Unlock your secure vault';
+    : serviceDown
+      ? 'No local vault on this device'
+      : setupRequired
+        ? 'Create the vault owner'
+        : 'Unlock your secure vault';
   const copy = checking
     ? 'Connecting to the local identity service before opening the workspace.'
-    : setupRequired
-      ? 'Set up the first local operator. Existing demo evidence will be sealed into this account.'
-      : 'Your documents, conversations and audit records remain isolated on this device.';
+    : serviceDown
+      ? 'AEGIS keeps documents and audit records on the machine it runs on, and no local service was found here. You can walk through the workbench with sample evidence instead.'
+      : setupRequired
+        ? 'Set up the first local operator. Existing demo evidence will be sealed into this account.'
+        : 'Your documents, conversations and audit records remain isolated on this device.';
 
   useEffect(() => {
     void getAuthStatus()
       .then(({ setup_required }) => setSetupRequired(setup_required))
-      .catch(() => setError('Local AEGIS service is not reachable.'));
+      .catch(() => {
+        setServiceDown(true);
+        setError('Local AEGIS service is not reachable.');
+      });
   }, []);
 
   async function submit(event: FormEvent) {
@@ -62,7 +71,18 @@ export function AuthGate({ onAuthenticated }: { onAuthenticated: (user: AuthUser
           <p>{copy}</p>
         </div>
         {checking && <div className="auth-loader"><span className="pulse" /> Verifying local session...</div>}
-        {error && setupRequired === null && <p className="auth-error auth-error-block" role="alert">{error}</p>}
+        {error && setupRequired === null && !serviceDown && (
+          <p className="auth-error auth-error-block" role="alert">{error}</p>
+        )}
+        {serviceDown && (
+          <div className="auth-demo">
+            <button className="auth-submit" type="button" onClick={() => onAuthenticated(DEMO_USER)}>
+              <MonitorPlay size={17} />
+              Open the sample workbench
+            </button>
+            <p>Sample evidence only. Nothing you type here is stored or sent anywhere.</p>
+          </div>
+        )}
         {setupRequired !== null && (
         <form className="auth-form" onSubmit={submit}>
           {setupRequired && (
@@ -117,7 +137,7 @@ export function AuthGate({ onAuthenticated }: { onAuthenticated: (user: AuthUser
           </button>
         </form>
         )}
-        <footer><span className="pulse" /> Credentials are hashed and stored locally</footer>
+        <footer><span className="pulse" /> {serviceDown ? 'Running from static files, no vault attached' : 'Credentials are hashed and stored locally'}</footer>
       </section>
     </div>
   );
